@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 /// @title Crowdfunding smart contract
-/// @author You
+/// @author Carl Josef Nasralla
 /// @notice Crowdfunding platform with admin control, refunds and verified recipients
 contract Crowdfunding {
     /*//////////////////////////////////////////////////////////////
@@ -150,6 +150,26 @@ contract Crowdfunding {
         );
 
         return campaignId;
+    }
+
+    /// @notice Donate ETH to an active crowdfunding campaign
+    /// @param campaignId ID of the campaign to donate to
+
+    function donate(
+        uint256 campaignId
+    ) external payable validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        // Basic validation
+        if (msg.value == 0) revert ZeroValue();
+        if (block.timestamp > campaign.deadline) revert DeadlinePassed();
+        if (campaign.status != CampaignStatus.Active) revert InvalidState();
+
+        // Effects: update state before any external interaction
+        campaign.totalRaised += msg.value;
+        contributions[campaignId][msg.sender] += msg.value;
+
+        emit DonationReceived(campaignId, msg.sender, msg.value);
     }
 
     /*//////////////////////////////////////////////////////////////
