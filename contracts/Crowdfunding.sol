@@ -172,6 +172,53 @@ contract Crowdfunding {
         emit DonationReceived(campaignId, msg.sender, msg.value);
     }
 
+    /// @notice Finalizes a campaign after deadline or when goal is reached
+    /// @param campaignId ID of the campaign to finalize
+    function finalizeCampaign(
+        uint256 campaignId
+    ) external validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        // Only active or paused campaigns can be finalized
+        if (
+            campaign.status != CampaignStatus.Active &&
+            campaign.status != CampaignStatus.Paused
+        ) {
+            revert InvalidState();
+        }
+
+        // Case 1: Campaign successful (goal reached before deadline)
+        if (
+            campaign.totalRaised >= campaign.goal &&
+            block.timestamp <= campaign.deadline
+        ) {
+            campaign.status = CampaignStatus.Successful;
+
+            uint256 amount = campaign.totalRaised;
+
+            // Effects before interaction
+            campaign.totalRaised = 0;
+
+            // Interaction: transfer ETH to recipient
+            (bool success, ) = campaign.recipient.call{value: amount}("");
+            require(success, "ETH transfer failed");
+
+            emit CampaignSuccessful(campaignId);
+            return;
+        }
+
+        // Case 2: Campaign failed (deadline passed without reaching goal)
+        if (block.timestamp > campaign.deadline) {
+            campaign.status = CampaignStatus.Failed;
+
+            emit CampaignFailed(campaignId);
+            return;
+        }
+
+        // Any other path is invalid
+        revert InvalidState();
+    }
+
     /*//////////////////////////////////////////////////////////////
                         RECEIVE / FALLBACK (VG)
     //////////////////////////////////////////////////////////////*/
