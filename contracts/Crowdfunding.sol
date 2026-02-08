@@ -245,6 +245,66 @@ contract Crowdfunding {
         emit RefundIssued(campaignId, msg.sender, amount);
     }
 
+    /// @notice Pause an active campaign (admin only)
+    /// @param campaignId ID of the campaign to pause
+    function pauseCampaign(
+        uint256 campaignId
+    ) external onlyAdmin validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        // Only active campaigns can be paused
+        if (campaign.status != CampaignStatus.Active) revert InvalidState();
+
+        campaign.status = CampaignStatus.Paused;
+
+        emit CampaignPaused(campaignId);
+    }
+
+    /// @notice Resume a paused campaign (admin only)
+    /// @param campaignId ID of the campaign to resume
+    function resumeCampaign(
+        uint256 campaignId
+    ) external onlyAdmin validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        if (campaign.status != CampaignStatus.Paused) revert InvalidState();
+
+        campaign.status = CampaignStatus.Active;
+
+        emit CampaignResumed(campaignId);
+    }
+
+    /// @notice Force a campaign to fail, e.g. due to suspected fraud (admin only)
+    /// @param campaignId ID of the campaign to force fail
+    function forceFailCampaign(
+        uint256 campaignId
+    ) external onlyAdmin validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        if (
+            campaign.status != CampaignStatus.Active &&
+            campaign.status != CampaignStatus.Paused
+        ) {
+            revert InvalidState();
+        }
+
+        campaign.status = CampaignStatus.Failed;
+
+        emit CampaignFailed(campaignId);
+    }
+
+    /// @notice Set or unset a recipient as verified (admin only)
+    /// @param recipient Address of the charity/recipient
+    /// @param isVerified True to mark as verified, false to unmark
+    function setVerifiedRecipient(
+        address recipient,
+        bool isVerified
+    ) external onlyAdmin {
+        if (recipient == address(0)) revert InvalidCampaign();
+
+        verifiedRecipients[recipient] = isVerified;
+    }
+
     /*//////////////////////////////////////////////////////////////
                         RECEIVE / FALLBACK (VG)
     //////////////////////////////////////////////////////////////*/
