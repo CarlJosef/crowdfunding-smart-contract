@@ -219,6 +219,32 @@ contract Crowdfunding {
         revert InvalidState();
     }
 
+    /// @notice Claim a refund for a failed campaign
+    /// @param campaignId ID of the campaign to claim refund from
+    function claimRefund(
+        uint256 campaignId
+    ) external validCampaign(campaignId) {
+        Campaign storage campaign = campaigns[campaignId];
+
+        // Refunds are only allowed for failed campaigns
+        if (campaign.status != CampaignStatus.Failed) revert InvalidState();
+
+        uint256 amount = contributions[campaignId][msg.sender];
+        if (amount == 0) revert NothingToRefund();
+
+        // Effects: prevent reentrancy and double refunds
+        contributions[campaignId][msg.sender] = 0;
+
+        // Invariant: refund amount must be positive before transfer
+        assert(amount > 0);
+
+        // Interaction: transfer ETH back to donor
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Refund transfer failed");
+
+        emit RefundIssued(campaignId, msg.sender, amount);
+    }
+
     /*//////////////////////////////////////////////////////////////
                         RECEIVE / FALLBACK (VG)
     //////////////////////////////////////////////////////////////*/
