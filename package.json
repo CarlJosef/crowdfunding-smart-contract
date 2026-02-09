@@ -1,18 +1,9 @@
 {
   "name": "crowfunding-contract",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "module",
   "devDependencies": {
-    "@types/node": "^22.19.10",
-    "hardhat": "^3.1.7",
-    "typescript": "~5.8.0"
+    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.2",
+    "hardhat": "^3.1.7"
   }
 }

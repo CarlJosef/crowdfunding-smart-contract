@@ -124,7 +124,7 @@ contract Crowdfunding {
     ) external returns (uint256) {
         if (recipient == address(0)) revert InvalidCampaign();
         if (goal == 0) revert ZeroValue();
-        if (deadline <= block.timestamp) revert DeadlinePassed();
+        if (deadline < block.timestamp) revert DeadlinePassed();
 
         uint256 campaignId = campaignCount;
 
