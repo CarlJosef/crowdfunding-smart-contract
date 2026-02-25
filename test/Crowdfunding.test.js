@@ -32,17 +32,27 @@ describe("Crowdfunding", function () {
   }
 
   it("creates a campaign with correct initial data", async function () {
-    const goal = ONE_ETH;
-    const { campaignId, deadline } = await createBasicCampaign(goal, 3600);
-
+    const { campaignId, deadline } = await createBasicCampaign(ONE_ETH, 3600);
     const campaign = await crowdfunding.campaigns(campaignId);
 
     expect(campaign.creator).to.equal(creator.address);
     expect(campaign.recipient).to.equal(recipient.address);
-    expect(campaign.goal).to.equal(goal);
+    expect(campaign.goal).to.equal(ONE_ETH);
     expect(campaign.deadline).to.equal(deadline);
-    // CampaignStatus.Active = 0
-    expect(campaign.status).to.equal(0n);
+    expect(campaign.totalRaised).to.equal(0n);
+    expect(campaign.finalRaised).to.equal(0n);
+    expect(campaign.status).to.equal(0n); // Active
+  });
+
+  it("reverts when creating campaign with zero recipient", async function () {
+    const latestBlock = await ethers.provider.getBlock("latest");
+    const deadline = latestBlock.timestamp + 3600;
+
+    await expect(
+      crowdfunding
+        .connect(creator)
+        .createCampaign(ethers.ZeroAddress, ONE_ETH, deadline),
+    ).to.be.revertedWithCustomError(crowdfunding, "InvalidRecipient");
   });
 
   it("reverts when creating campaign with zero goal", async function () {
@@ -73,7 +83,10 @@ describe("Crowdfunding", function () {
     await crowdfunding.connect(donor1).donate(campaignId, { value: ONE_ETH });
 
     const campaign = await crowdfunding.campaigns(campaignId);
-    const contribution = await crowdfunding.contributions(campaignId, donor1);
+    const contribution = await crowdfunding.contributions(
+      campaignId,
+      donor1.address,
+    );
 
     expect(campaign.totalRaised).to.equal(ONE_ETH);
     expect(contribution).to.equal(ONE_ETH);
@@ -130,29 +143,118 @@ describe("Crowdfunding", function () {
   });
 
   it("finalizes successful campaign and sends funds to recipient", async function () {
-    const goal = ONE_ETH;
-    const { campaignId } = await createBasicCampaign(goal, 3600);
+    const { campaignId, deadline } = await createBasicCampaign(ONE_ETH, 3600);
 
-    const donation = ONE_ETH;
+    // Ensure donation happens before deadline (removes timing flakiness)
+    await networkHelpers.time.setNextBlockTimestamp(deadline - 10);
+    await networkHelpers.mine();
 
-    await crowdfunding.connect(donor1).donate(campaignId, { value: donation });
+    await crowdfunding.connect(donor1).donate(campaignId, { value: ONE_ETH });
 
     const beforeBalance = await ethers.provider.getBalance(recipient.address);
 
     await crowdfunding.finalizeCampaign(campaignId);
 
     const afterBalance = await ethers.provider.getBalance(recipient.address);
-    const campaign = await crowdfunding.campaigns(campaignId);
+    expect(afterBalance - beforeBalance).to.equal(ONE_ETH);
 
-    expect(campaign.status).to.equal(2n); // CampaignStatus.Successful
+    const campaign = await crowdfunding.campaigns(campaignId);
+    expect(campaign.status).to.equal(2n); // Successful
     expect(campaign.totalRaised).to.equal(0n);
-    expect(afterBalance - beforeBalance).to.equal(donation);
+    expect(campaign.finalRaised).to.equal(ONE_ETH);
   });
 
-  it("allows admin to manage verified recipients", async function () {
+  it("still finalizes as Successful even if finalize happens after deadline (goal reached)", async function () {
+    const { campaignId, deadline } = await createBasicCampaign(ONE_ETH, 60);
+
+    // Ensure we are safely BEFORE deadline when donating
+    await networkHelpers.time.setNextBlockTimestamp(deadline - 10);
+    await networkHelpers.mine();
+
+    await crowdfunding.connect(donor1).donate(campaignId, { value: ONE_ETH });
+
+    // Move PAST deadline before finalize
+    await networkHelpers.time.setNextBlockTimestamp(deadline + 10);
+    await networkHelpers.mine();
+
+    const beforeBalance = await ethers.provider.getBalance(recipient.address);
+
+    await crowdfunding.finalizeCampaign(campaignId);
+
+    const afterBalance = await ethers.provider.getBalance(recipient.address);
+    expect(afterBalance - beforeBalance).to.equal(ONE_ETH);
+
+    const campaign = await crowdfunding.campaigns(campaignId);
+    expect(campaign.status).to.equal(2n); // Successful
+    expect(campaign.finalRaised).to.equal(ONE_ETH);
+    expect(campaign.totalRaised).to.equal(0n);
+  });
+
+  it("reverts finalize before deadline if goal not met", async function () {
+    const { campaignId } = await createBasicCampaign(ONE_ETH, 3600);
+
+    await crowdfunding
+      .connect(donor1)
+      .donate(campaignId, { value: ONE_ETH / 2n });
+
+    await expect(
+      crowdfunding.finalizeCampaign(campaignId),
+    ).to.be.revertedWithCustomError(crowdfunding, "DeadlineNotReached");
+  });
+
+  it("finalizes as Failed after deadline if goal not met, allowing refunds", async function () {
+    const { campaignId } = await createBasicCampaign(ONE_ETH, 60);
+
+    await crowdfunding
+      .connect(donor1)
+      .donate(campaignId, { value: ONE_ETH / 4n });
+    await crowdfunding
+      .connect(donor2)
+      .donate(campaignId, { value: ONE_ETH / 4n });
+
+    await networkHelpers.time.increase(3600);
+    await networkHelpers.mine();
+
+    await crowdfunding.finalizeCampaign(campaignId);
+
+    const campaign = await crowdfunding.campaigns(campaignId);
+    expect(campaign.status).to.equal(3n); // Failed
+
+    const before1 = await ethers.provider.getBalance(donor1.address);
+    const tx1 = await crowdfunding.connect(donor1).claimRefund(campaignId);
+    const r1 = await tx1.wait();
+    const gas1 = r1.gasUsed * r1.gasPrice;
+
+    const after1 = await ethers.provider.getBalance(donor1.address);
+    expect(after1 - before1 + gas1).to.equal(ONE_ETH / 4n);
+    expect(
+      await crowdfunding.contributions(campaignId, donor1.address),
+    ).to.equal(0n);
+
+    await expect(
+      crowdfunding.connect(donor1).claimRefund(campaignId),
+    ).to.be.revertedWithCustomError(crowdfunding, "NothingToRefund");
+  });
+
+  it("reverts claimRefund unless campaign is Failed", async function () {
+    const { campaignId } = await createBasicCampaign(ONE_ETH, 3600);
+
+    await crowdfunding
+      .connect(donor1)
+      .donate(campaignId, { value: ONE_ETH / 2n });
+
+    await expect(
+      crowdfunding.connect(donor1).claimRefund(campaignId),
+    ).to.be.revertedWithCustomError(crowdfunding, "InvalidState");
+  });
+
+  it("allows admin to manage verified recipients and reflects live status via helper", async function () {
+    const { campaignId } = await createBasicCampaign(ONE_ETH, 3600);
+
     expect(await crowdfunding.verifiedRecipients(recipient.address)).to.equal(
       false,
     );
+    expect(await crowdfunding.isRecipientVerified(campaignId)).to.equal(false);
 
     await crowdfunding
       .connect(admin)
@@ -161,6 +263,7 @@ describe("Crowdfunding", function () {
     expect(await crowdfunding.verifiedRecipients(recipient.address)).to.equal(
       true,
     );
+    expect(await crowdfunding.isRecipientVerified(campaignId)).to.equal(true);
 
     await crowdfunding
       .connect(admin)
@@ -169,6 +272,7 @@ describe("Crowdfunding", function () {
     expect(await crowdfunding.verifiedRecipients(recipient.address)).to.equal(
       false,
     );
+    expect(await crowdfunding.isRecipientVerified(campaignId)).to.equal(false);
   });
 
   it("reverts setVerifiedRecipient for zero address", async function () {
@@ -176,7 +280,25 @@ describe("Crowdfunding", function () {
       crowdfunding
         .connect(admin)
         .setVerifiedRecipient(ethers.ZeroAddress, true),
-    ).to.be.revertedWithCustomError(crowdfunding, "InvalidCampaign");
+    ).to.be.revertedWithCustomError(crowdfunding, "InvalidRecipient");
+  });
+
+  it("convenience getter returns campaign and caller contribution", async function () {
+    const { campaignId } = await createBasicCampaign(ONE_ETH, 3600);
+
+    await crowdfunding
+      .connect(donor1)
+      .donate(campaignId, { value: ONE_ETH / 3n });
+
+    const res = await crowdfunding
+      .connect(donor1)
+      .getCampaignWithMyContribution(campaignId);
+    const campaign = res[0];
+    const myContribution = res[1];
+
+    expect(campaign.creator).to.equal(creator.address);
+    expect(campaign.recipient).to.equal(recipient.address);
+    expect(myContribution).to.equal(ONE_ETH / 3n);
   });
 
   it("reverts direct ETH transfers via receive()", async function () {
@@ -185,7 +307,7 @@ describe("Crowdfunding", function () {
         to: crowdfunding.target,
         value: ONE_ETH,
       }),
-    ).to.be.revertedWith("Direct ETH transfers not allowed");
+    ).to.be.revertedWithCustomError(crowdfunding, "DirectEthNotAllowed");
   });
 
   it("reverts invalid calls via fallback()", async function () {
@@ -195,7 +317,7 @@ describe("Crowdfunding", function () {
         value: ONE_ETH,
         data: "0x1234",
       }),
-    ).to.be.revertedWith("Invalid call");
+    ).to.be.revertedWithCustomError(crowdfunding, "InvalidCall");
   });
 
   it("allows admin to force fail an active campaign", async function () {
@@ -204,7 +326,7 @@ describe("Crowdfunding", function () {
     await crowdfunding.connect(admin).forceFailCampaign(campaignId);
 
     const campaign = await crowdfunding.campaigns(campaignId);
-    expect(campaign.status).to.equal(3n); // CampaignStatus.Failed
+    expect(campaign.status).to.equal(3n); // Failed
   });
 
   it("only allows forceFail from admin", async function () {

@@ -142,6 +142,29 @@ The contract clearly meets the technical minimum requirements:
 
 ---
 
+# 10.1 Version notes (Crowdfunding @2.0+)
+
+This contract has been improved after initial grading to make behavior more consistent and easier to test.
+
+### Behavioral changes
+
+- **Finalize semantics:** A campaign is finalized as **Successful** whenever `totalRaised >= goal`, even if `finalizeCampaign()` is called _after_ the deadline.
+  The deadline stops donations, but does not invalidate reaching the goal.
+- **Recipient verification:** Recipient verification is a **live lookup** via `verifiedRecipients[campaign.recipient]` (single source of truth).
+  `CampaignCreated` still emits a snapshot boolean for convenience.
+
+### Data model changes
+
+- Added `finalRaised` to keep an on-chain snapshot of the paid-out amount after a successful finalize.
+- `totalRaised` represents the current escrowed amount (set to `0` after a successful payout).
+
+### Safety / robustness
+
+- Added a simple `nonReentrant` guard for functions performing external ETH transfers (`finalizeCampaign`, `claimRefund`).
+- `receive()` / `fallback()` now revert using custom errors instead of revert strings.
+
+---
+
 # 11. Summary
 
 - The `Crowdfunding` contract implements:
